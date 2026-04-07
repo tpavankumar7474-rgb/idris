@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Districts Tree Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.css" />
+  <script src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100vh; }
+    .leaflet-control-layers {
+      max-height: 80vh;
+      overflow: auto;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+  const map = L.map('map').setView([26.42, 50.09], 11);
+
+  const osm = L.tileLayer(
+    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { attribution: '&copy; OpenStreetMap contributors' }
+  ).addTo(map);
+
+  const colors = {
+    "Dammam": "blue",
+    "Al Khobar": "red",
+    "Dhahran": "green"
+  };
+
+  const municipalityCodes = {
+    "Dammam": "10501",
+    "Al Khobar": "10506",
+    "Dhahran": "10513"
+  };
+
+  const grouped = {
+    "Dammam": [],
+    "Al Khobar": [],
+    "Dhahran": []
+  };
+
+  const boundaryLayer = L.layerGroup();
+
+  fetch("districts.geojson")
+    .then(r => r.json())
+    .then(data => {
+      data.features.forEach(feature => {
+        const city = feature.properties.City;
+        const name = feature.properties.Name;
+
+        if (!grouped[city]) return;
+
+        const districtLayer = L.geoJSON(feature, {
+          style: {
+            color: "black",
+            weight: 1,
+            fillColor: colors[city] || "gray",
+            fillOpacity: 0.55
+          }
+        }).bindTooltip(`${name} (${city})`);
+
+        grouped[city].push({
+          label: name,
+          layer: districtLayer
+        });
+
+        const b = L.geoJSON(feature, {
+          style: {
+            color: "black",
+            weight: 1,
+            fillOpacity: 0
+          }
+        });
+        boundaryLayer.addLayer(b);
+      });
+
+      Object.keys(grouped).forEach(city => {
+        grouped[city].sort((a, b) => a.label.localeCompare(b.label, 'ar'));
+      });
+
+      const overlaysTree = {
+        label: 'Districts by Municipality',
+        selectAllCheckbox: false,
+        children: [
+          {
+            label: `Dammam (${municipalityCodes["Dammam"]})`,
+            selectAllCheckbox: true,
+            children: grouped["Dammam"]
+          },
+          {
+            label: `Al Khobar (${municipalityCodes["Al Khobar"]})`,
+            selectAllCheckbox: true,
+            children: grouped["Al Khobar"]
+          },
+          {
+            label: `Dhahran (${municipalityCodes["Dhahran"]})`,
+            selectAllCheckbox: true,
+            children: grouped["Dhahran"]
+          },
+          {
+            label: "District Boundary",
+            layer: boundaryLayer
+          }
+        ]
+      };
+
+      L.control.layers.tree(
+        { "OpenStreetMap": osm },
+        overlaysTree,
+        {
+          collapsed: false
+        }
+      ).addTo(map);
+    });
+</script>
+</body>
+</html>
