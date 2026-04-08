@@ -1,4 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>District Map + Grafana</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<!-- ✅ CSS FIRST -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.css"/>
+
+<style>
+html, body { margin:0; padding:0; height:100%; }
+#map { width:100%; height:100vh; }
+
+.leaflet-control-layers {
+  max-height:80vh;
+  overflow:auto;
+  font-size:14px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<!-- ✅ JS LIBRARIES (ORDER VERY IMPORTANT) -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
+
 <script>
+
+/////////////////////////////////////////////////////
+// SAFE LOAD (fix L undefined issue)
+/////////////////////////////////////////////////////
+
+window.onload = function(){
+
+console.log("✅ Map script started");
 
 /////////////////////////////////////////////////////
 // MAP INIT
@@ -12,15 +53,86 @@ const osm = L.tileLayer(
 ).addTo(map);
 
 /////////////////////////////////////////////////////
-// GLOBAL STORAGE
+// DISTRICT COUNT LAYER (NO CLUSTER)
 /////////////////////////////////////////////////////
 
-let districtLayers = {};
-let districtCounts = {};
-let countMarkers = [];
+const districtCountLayer = L.layerGroup().addTo(map);
 
 /////////////////////////////////////////////////////
-// DISTRICT COLORS
+// TOOLTIP
+/////////////////////////////////////////////////////
+
+function buildTooltip(r){
+  return `
+    <b>Ticket:</b> ${r.ticket ?? "N/A"}<br>
+    <b>Location:</b> ${r.state ?? "N/A"}<br>
+    <b>Classification:</b> ${r.classification ?? "N/A"}<br>
+    <b>Status:</b> ${r.status ?? "N/A"}
+  `;
+}
+
+/////////////////////////////////////////////////////
+// GROUP DATA BY DISTRICT
+/////////////////////////////////////////////////////
+
+function renderDistrictCounts(rows){
+
+  districtCountLayer.clearLayers();
+
+  const groupedData = {};
+
+  rows.forEach(r => {
+    if(!r.state) return;
+
+    if(!groupedData[r.state]){
+      groupedData[r.state] = {
+        count: 0,
+        lat: r.lat,
+        long: r.long
+      };
+    }
+
+    groupedData[r.state].count += 1;
+  });
+
+  Object.keys(groupedData).forEach(name => {
+
+    const d = groupedData[name];
+
+    const marker = L.marker([d.lat, d.long], {
+      icon: L.divIcon({
+        html: `<div style="
+          background:red;
+          color:white;
+          border-radius:50%;
+          width:35px;
+          height:35px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          font-weight:bold;
+        ">${d.count}</div>`,
+        className: ""
+      })
+    });
+
+    marker.bindTooltip(`<b>${name}</b><br>Total: ${d.count}`);
+
+    marker.on("click", () => {
+      window.parent.postMessage({
+        type: "mapClick",
+        state: name,
+        lat: d.lat,
+        long: d.long
+      }, "*");
+    });
+
+    districtCountLayer.addLayer(marker);
+  });
+}
+
+/////////////////////////////////////////////////////
+// DISTRICT TREE
 /////////////////////////////////////////////////////
 
 const colors = {
@@ -44,12 +156,17 @@ const grouped = {
 const boundaryLayer = L.layerGroup();
 
 /////////////////////////////////////////////////////
-// LOAD DISTRICTS
+// LOAD GEOJSON (FIXED PATH)
 /////////////////////////////////////////////////////
 
-fetch("districts.geojson")
-.then(r => r.json())
+fetch("./districts.geojson")
+.then(res => {
+  if(!res.ok) throw new Error("GeoJSON not found");
+  return res.json();
+})
 .then(data => {
+
+  console.log("✅ GeoJSON Loaded");
 
   data.features.forEach(feature => {
 
@@ -63,12 +180,9 @@ fetch("districts.geojson")
         color: "black",
         weight: 1,
         fillColor: colors[city] || "gray",
-        fillOpacity: 0.3
+        fillOpacity: 0.5
       }
-    }).bindTooltip(`${name}`);
-
-    // 🔥 store for counting
-    districtLayers[name] = layer;
+    }).bindTooltip(`${name} (${city})`);
 
     grouped[city].push({
       label: name,
@@ -80,11 +194,10 @@ fetch("districts.geojson")
         style: { color: "black", weight: 1, fillOpacity: 0 }
       })
     );
-
   });
 
   const overlaysTree = {
-    label: 'Districts by Municipality',
+    label: 'Districts',
     children: [
       {
         label: `Dammam (${municipalityCodes["Dammam"]})`,
@@ -102,8 +215,12 @@ fetch("districts.geojson")
         children: grouped["Dhahran"]
       },
       {
-        label: "District Boundary",
+        label: "Boundary",
         layer: boundaryLayer
+      },
+      {
+        label: "District Counts",
+        layer: districtCountLayer
       }
     ]
   };
@@ -114,81 +231,20 @@ fetch("districts.geojson")
     { collapsed: false }
   ).addTo(map);
 
-});
+})
+.catch(err => console.error("❌ GeoJSON Error:", err));
 
 /////////////////////////////////////////////////////
-// CLEAR OLD LABELS
-/////////////////////////////////////////////////////
-
-function clearCounts(){
-  countMarkers.forEach(m => map.removeLayer(m));
-  countMarkers = [];
-}
-
-/////////////////////////////////////////////////////
-// CALCULATE DISTRICT COUNTS
-/////////////////////////////////////////////////////
-
-function renderDistrictCounts(rows){
-
-  clearCounts();
-  districtCounts = {};
-
-  // 🔥 count per district
-  rows.forEach(r => {
-    if(!r.state) return;
-
-    if(!districtCounts[r.state]){
-      districtCounts[r.state] = 0;
-    }
-
-    districtCounts[r.state] += 1;
-  });
-
-  // 🔥 place count label
-  Object.keys(districtCounts).forEach(name => {
-
-    const layer = districtLayers[name];
-    if(!layer) return;
-
-    const center = layer.getBounds().getCenter();
-
-    const marker = L.marker(center, {
-      icon: L.divIcon({
-        className: "district-count",
-        html: `<div style="
-          background:white;
-          border-radius:50%;
-          padding:8px;
-          font-weight:bold;
-          border:2px solid black;
-          text-align:center;
-        ">
-          ${districtCounts[name]}
-        </div>`,
-        iconSize: [40, 40]
-      })
-    });
-
-    marker.addTo(map);
-    countMarkers.push(marker);
-
-  });
-
-}
-
-/////////////////////////////////////////////////////
-// RECEIVE DATA FROM GRAFANA
+// RECEIVE GRAFANA DATA
 /////////////////////////////////////////////////////
 
 window.addEventListener("message", (event) => {
-
-  console.log("📩 Received:", event.data);
 
   if (
     event.data?.type === "incidentData" &&
     Array.isArray(event.data.data)
   ) {
+    console.log("📩 Data received:", event.data.data.length);
     renderDistrictCounts(event.data.data);
   }
 
@@ -200,4 +256,9 @@ window.addEventListener("message", (event) => {
 
 window.parent.postMessage({ type: "iframeReady" }, "*");
 
+}; // END window.onload
+
 </script>
+
+</body>
+</html>
