@@ -2,74 +2,178 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>District Map</title>
+<title>District Map + Grafana</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-<!-- ✅ CSS -->
+<!-- CSS -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.css"/>
 
 <style>
 html, body { margin:0; padding:0; height:100%; }
 #map { width:100%; height:100vh; }
-</style>
 
+.leaflet-control-layers {
+  max-height:80vh;
+  overflow:auto;
+}
+</style>
 </head>
 
 <body>
 
 <div id="map"></div>
 
-<!-- ✅ JS (USE DEFER - VERY IMPORTANT) -->
+<!-- JS (ORDER IMPORTANT) -->
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script defer src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
 
-<!-- ✅ YOUR SCRIPT (AFTER LEAFLET) -->
 <script defer>
-
 document.addEventListener("DOMContentLoaded", function(){
 
-  console.log("✅ Script started");
+if(typeof L === "undefined"){
+  alert("Leaflet not loaded");
+  return;
+}
 
-  // ✅ CHECK LEAFLET
-  if (typeof L === "undefined") {
-    alert("Leaflet not loaded!");
-    return;
-  }
+// ---------------- MAP ----------------
+const map = L.map('map').setView([26.42, 50.09], 11);
 
-  // ----------------------------
-  // MAP INIT
-  // ----------------------------
-  const map = L.map('map').setView([26.42, 50.09], 11);
+const osm = L.tileLayer(
+  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: '&copy; OpenStreetMap contributors' }
+).addTo(map);
 
-  L.tileLayer(
-    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    { attribution: '&copy; OpenStreetMap contributors' }
+// ---------------- STORAGE ----------------
+let districtCenters = {};
+const districtCountLayer = L.layerGroup().addTo(map);
+
+// ---------------- RENDER COUNTS ----------------
+function renderDistrictCounts(rows){
+
+  districtCountLayer.clearLayers();
+
+  const dataMap = {};
+  rows.forEach(r => {
+    if(r.state) dataMap[r.state] = r.count;
+  });
+
+  Object.keys(dataMap).forEach(name => {
+
+    const center = districtCenters[name];
+    if(!center) return;
+
+    const marker = L.marker(center, {
+      icon: L.divIcon({
+        html: `<div style="
+          background:red;
+          color:white;
+          border-radius:50%;
+          width:35px;
+          height:35px;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          font-weight:bold;
+        ">${dataMap[name]}</div>`,
+        className:""
+      })
+    });
+
+    marker.bindTooltip(`<b>${name}</b><br>Total: ${dataMap[name]}`);
+
+    marker.on("click", ()=>{
+      window.parent.postMessage({
+        type:"mapClick",
+        state:name
+      }, "*");
+    });
+
+    districtCountLayer.addLayer(marker);
+  });
+}
+
+// ---------------- DISTRICT TREE ----------------
+const colors = {
+  "Dammam": "blue",
+  "Al Khobar": "red",
+  "Dhahran": "green"
+};
+
+const grouped = {
+  "Dammam": [],
+  "Al Khobar": [],
+  "Dhahran": []
+};
+
+const boundaryLayer = L.layerGroup();
+
+// ---------------- LOAD GEOJSON ----------------
+fetch("./districts.geojson")
+.then(res => res.json())
+.then(data => {
+
+  data.features.forEach(f => {
+
+    const city = f.properties.City;
+    const name = f.properties.Name;
+
+    if(!grouped[city]) return;
+
+    const geo = L.geoJSON(f, {
+      style:{
+        color:"black",
+        weight:1,
+        fillColor:colors[city] || "gray",
+        fillOpacity:0.4
+      }
+    }).bindTooltip(`${name} (${city})`);
+
+    // store center
+    districtCenters[name] = geo.getBounds().getCenter();
+
+    grouped[city].push({
+      label:name,
+      layer:geo
+    });
+
+    boundaryLayer.addLayer(
+      L.geoJSON(f,{
+        style:{color:"black",weight:1,fillOpacity:0}
+      })
+    );
+  });
+
+  // TREE CONTROL
+  L.control.layers.tree(
+    {"OpenStreetMap":osm},
+    {
+      label:"Districts",
+      children:[
+        {label:"Dammam", children:grouped["Dammam"]},
+        {label:"Al Khobar", children:grouped["Al Khobar"]},
+        {label:"Dhahran", children:grouped["Dhahran"]},
+        {label:"Boundary", layer:boundaryLayer},
+        {label:"District Counts", layer:districtCountLayer}
+      ]
+    },
+    {collapsed:false}
   ).addTo(map);
 
-  // ----------------------------
-  // TEST MARKER (DEBUG)
-  // ----------------------------
-  L.marker([26.42, 50.09])
-    .addTo(map)
-    .bindTooltip("Map Loaded ✅")
-    .openTooltip();
+});
 
-  // ----------------------------
-  // LOAD GEOJSON (OPTIONAL TEST)
-  // ----------------------------
-  fetch("./districts.geojson")
-    .then(res => {
-      if (!res.ok) throw new Error("GeoJSON not found");
-      return res.json();
-    })
-    .then(data => {
-      console.log("✅ GeoJSON loaded");
+// ---------------- GRAFANA DATA ----------------
+window.addEventListener("message", (event)=>{
 
-      L.geoJSON(data).addTo(map);
+  if(event.data?.type==="incidentData"){
+    console.log("📩 Data received:", event.data.data);
+    renderDistrictCounts(event.data.data);
+  }
 
-    })
-    .catch(err => {
-      console.error("❌ GeoJSON error:", err);
-    });
+});
+
+// ---------------- READY ----------------
+window.parent.postMessage({type:"iframeReady"}, "*");
 
 });
 </script>
