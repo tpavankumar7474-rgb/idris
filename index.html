@@ -1,49 +1,6 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>District Map + Grafana</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-<!-- ✅ CSS FIRST -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
-<link rel="stylesheet" href="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.css"/>
-
-<style>
-html, body { margin:0; padding:0; height:100%; }
-#map { width:100%; height:100vh; }
-
-.leaflet-control-layers {
-  max-height:80vh;
-  overflow:auto;
-  font-size:14px;
-}
-</style>
-</head>
-
-<body>
-
-<div id="map"></div>
-
-<!-- ✅ JS LIBRARIES (ORDER VERY IMPORTANT) -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<script src="https://unpkg.com/leaflet.control.layers.tree@1.1.0/L.Control.Layers.Tree.js"></script>
-
 <script>
 
-/////////////////////////////////////////////////////
-// SAFE LOAD (fix L undefined issue)
-/////////////////////////////////////////////////////
-
 window.onload = function(){
-
-console.log("✅ Map script started");
-
-/////////////////////////////////////////////////////
-// MAP INIT
-/////////////////////////////////////////////////////
 
 const map = L.map('map').setView([26.42, 50.09], 11);
 
@@ -52,54 +9,41 @@ const osm = L.tileLayer(
   { attribution: '&copy; OpenStreetMap contributors' }
 ).addTo(map);
 
-/////////////////////////////////////////////////////
-// DISTRICT COUNT LAYER (NO CLUSTER)
-/////////////////////////////////////////////////////
-
 const districtCountLayer = L.layerGroup().addTo(map);
 
-/////////////////////////////////////////////////////
-// TOOLTIP
-/////////////////////////////////////////////////////
+// store geojson centers
+let districtCenters = {};
 
-function buildTooltip(r){
-  return `
-    <b>Ticket:</b> ${r.ticket ?? "N/A"}<br>
-    <b>Location:</b> ${r.state ?? "N/A"}<br>
-    <b>Classification:</b> ${r.classification ?? "N/A"}<br>
-    <b>Status:</b> ${r.status ?? "N/A"}
-  `;
+// ----------------------------
+// GET CENTER OF POLYGON
+// ----------------------------
+function getCenter(layer){
+  return layer.getBounds().getCenter();
 }
 
-/////////////////////////////////////////////////////
-// GROUP DATA BY DISTRICT
-/////////////////////////////////////////////////////
-
+// ----------------------------
+// RENDER COUNTS (NO LAT/LONG)
+// ----------------------------
 function renderDistrictCounts(rows){
 
   districtCountLayer.clearLayers();
 
-  const groupedData = {};
+  const dataMap = {};
 
   rows.forEach(r => {
     if(!r.state) return;
-
-    if(!groupedData[r.state]){
-      groupedData[r.state] = {
-        count: 0,
-        lat: r.lat,
-        long: r.long
-      };
-    }
-
-    groupedData[r.state].count += 1;
+    dataMap[r.state] = r.count;
   });
 
-  Object.keys(groupedData).forEach(name => {
+  Object.keys(dataMap).forEach(name => {
 
-    const d = groupedData[name];
+    const center = districtCenters[name];
 
-    const marker = L.marker([d.lat, d.long], {
+    if(!center) return; // skip if not found
+
+    const count = dataMap[name];
+
+    const marker = L.marker(center, {
       icon: L.divIcon({
         html: `<div style="
           background:red;
@@ -111,19 +55,17 @@ function renderDistrictCounts(rows){
           align-items:center;
           justify-content:center;
           font-weight:bold;
-        ">${d.count}</div>`,
+        ">${count}</div>`,
         className: ""
       })
     });
 
-    marker.bindTooltip(`<b>${name}</b><br>Total: ${d.count}`);
+    marker.bindTooltip(`<b>${name}</b><br>Total: ${count}`);
 
     marker.on("click", () => {
       window.parent.postMessage({
         type: "mapClick",
-        state: name,
-        lat: d.lat,
-        long: d.long
+        state: name
       }, "*");
     });
 
@@ -131,9 +73,9 @@ function renderDistrictCounts(rows){
   });
 }
 
-/////////////////////////////////////////////////////
+// ----------------------------
 // DISTRICT TREE
-/////////////////////////////////////////////////////
+// ----------------------------
 
 const colors = {
   "Dammam": "blue",
@@ -155,18 +97,13 @@ const grouped = {
 
 const boundaryLayer = L.layerGroup();
 
-/////////////////////////////////////////////////////
-// LOAD GEOJSON (FIXED PATH)
-/////////////////////////////////////////////////////
+// ----------------------------
+// LOAD GEOJSON
+// ----------------------------
 
 fetch("./districts.geojson")
-.then(res => {
-  if(!res.ok) throw new Error("GeoJSON not found");
-  return res.json();
-})
+.then(res => res.json())
 .then(data => {
-
-  console.log("✅ GeoJSON Loaded");
 
   data.features.forEach(feature => {
 
@@ -175,18 +112,22 @@ fetch("./districts.geojson")
 
     if (!grouped[city]) return;
 
-    const layer = L.geoJSON(feature, {
+    const geoLayer = L.geoJSON(feature, {
       style: {
         color: "black",
         weight: 1,
         fillColor: colors[city] || "gray",
-        fillOpacity: 0.5
+        fillOpacity: 0.4
       }
     }).bindTooltip(`${name} (${city})`);
 
+    // 👉 store center
+    const center = getCenter(geoLayer);
+    districtCenters[name] = center;
+
     grouped[city].push({
       label: name,
-      layer: layer
+      layer: geoLayer
     });
 
     boundaryLayer.addLayer(
@@ -231,12 +172,11 @@ fetch("./districts.geojson")
     { collapsed: false }
   ).addTo(map);
 
-})
-.catch(err => console.error("❌ GeoJSON Error:", err));
+});
 
-/////////////////////////////////////////////////////
-// RECEIVE GRAFANA DATA
-/////////////////////////////////////////////////////
+// ----------------------------
+// RECEIVE DATA FROM GRAFANA
+// ----------------------------
 
 window.addEventListener("message", (event) => {
 
@@ -244,21 +184,17 @@ window.addEventListener("message", (event) => {
     event.data?.type === "incidentData" &&
     Array.isArray(event.data.data)
   ) {
-    console.log("📩 Data received:", event.data.data.length);
     renderDistrictCounts(event.data.data);
   }
 
 });
 
-/////////////////////////////////////////////////////
+// ----------------------------
 // READY SIGNAL
-/////////////////////////////////////////////////////
+// ----------------------------
 
 window.parent.postMessage({ type: "iframeReady" }, "*");
 
-}; // END window.onload
+};
 
 </script>
-
-</body>
-</html>
